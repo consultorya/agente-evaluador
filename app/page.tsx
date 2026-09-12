@@ -98,7 +98,10 @@ export default function StudentPage() {
   // Iniciar el examen
   const handleIniciarExamen = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.endsWith('@ucvvirtual.edu.pe')) {
+    
+    const correoLimpio = email.trim().toLowerCase();
+
+    if (!correoLimpio.endsWith('@ucvvirtual.edu.pe')) {
       alert('Debes ingresar un correo institucional válido de la UCV (@ucvvirtual.edu.pe).');
       return;
     }
@@ -112,10 +115,25 @@ export default function StudentPage() {
     setErrorMsg('');
 
     try {
+      // 1. NUEVA VALIDACIÓN: Verificar si el alumno está en la lista blanca (tabla estudiantes)
+      const { data: estudianteValido, error: errEstudiante } = await supabase
+        .from('estudiantes')
+        .select('*')
+        .eq('email', correoLimpio)
+        .eq('seccion', seccion)
+        .single();
+
+      if (errEstudiante || !estudianteValido) {
+        setErrorMsg('Tu correo no está registrado en el padrón o no pertenece a la sección seleccionada.');
+        setCargando(false);
+        return;
+      }
+
+      // 2. TU CÓDIGO ORIGINAL: Obtener el examen desde la API
       const res = await fetch('/api/obtener-examen-estudiante', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ estudiante_email: email }),
+        body: JSON.stringify({ estudiante_email: correoLimpio }),
       });
 
       const data = await res.json();
@@ -126,6 +144,7 @@ export default function StudentPage() {
         return;
       }
 
+      // 3. SE MANTIENEN TUS ESTADOS ORIGINALES
       setTituloExamen(data.titulo);
       setPreguntas(data.preguntas);
       setPaso('examen');
@@ -189,6 +208,7 @@ export default function StudentPage() {
       setCargando(false);
     }
   };
+
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">

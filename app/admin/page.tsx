@@ -8,10 +8,19 @@ import * as XLSX from 'xlsx';
 // Configurar el worker para pdfjs-dist
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
+
+
+interface EstudianteBD {
+  id: number;
+  nombre: string;
+  email: string;
+  seccion: string;
+}
 
 interface Resultado {
   id: number;
@@ -37,9 +46,15 @@ export default function AdminPage() {
   const [errorPassword, setErrorPassword] = useState('');
 
   // Estado de Pestañas
-  const [pestana, setPestana] = useState<'examen' | 'secciones' | 'resultados'>('examen');
+  const [pestana, setPestana] = useState<'examen' | 'secciones' | 'estudiantes' | 'resultados'>('examen');
+  
+  // Estados para gestión de estudiantes
+  const [estudiantes, setEstudiantes] = useState<EstudianteBD[]>([]);
+  const [nuevoNombre, setNuevoNombre] = useState('');
+  const [nuevoEmail, setNuevoEmail] = useState('');
+  const [nuevaSeccionEstudiante, setNuevaSeccionEstudiante] = useState('');
 
-  // Estado del Examen
+    // Estado del Examen
   const [titulo, setTitulo] = useState('');
   const [textoBase, setTextoBase] = useState('');
   const [cantidadPreguntas, setCantidadPreguntas] = useState(5);
@@ -56,6 +71,12 @@ export default function AdminPage() {
   const [resultados, setResultados] = useState<Resultado[]>([]);
   const [seccionFiltro, setSeccionFiltro] = useState<string>('TODAS');
 
+  // Cargar estudiantes en el useEffect cuando esté autenticado
+  const cargarEstudiantes = async () => {
+    const { data } = await supabase.from('estudiantes').select('*').order('nombre', { ascending: true });
+    if (data) setEstudiantes(data);
+  };
+
   // Verificar si ya inició sesión previamente en la sesión actual
   useEffect(() => {
     const esAdmin = sessionStorage.getItem('admin_authenticated');
@@ -71,6 +92,35 @@ export default function AdminPage() {
       cargarResultados();
     }
   }, [autenticado]);
+
+  const handleAgregarEstudiante = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!nuevoNombre.trim() || !nuevoEmail.trim() || !nuevaSeccionEstudiante) {
+      alert('Completa todos los campos');
+      return;
+    }
+
+    const { error } = await supabase.from('estudiantes').insert({
+      nombre: nuevoNombre.trim(),
+      email: nuevoEmail.trim().toLowerCase(),
+      seccion: nuevaSeccionEstudiante,
+    });
+
+    if (error) {
+      alert(`Error: ${error.message}`);
+    } else {
+      setNuevoNombre('');
+      setNuevoEmail('');
+      setNuevaSeccionEstudiante('');
+      cargarEstudiantes();
+    }
+  };
+
+  const handleEliminarEstudiante = async (id: number) => {
+    if (!confirm('¿Eliminar a este estudiante del padrón?')) return;
+    const { error } = await supabase.from('estudiantes').delete().eq('id', id);
+    if (!error) cargarEstudiantes();
+  };
 
   // Manejar Login Docente
   const handleLogin = (e: React.FormEvent) => {
@@ -327,6 +377,12 @@ export default function AdminPage() {
           >
             Reporte de Calificaciones ({resultados.length})
           </button>
+          <button
+            onClick={() => { setPestana('estudiantes'); cargarEstudiantes(); }}
+            className={`px-6 py-3 font-semibold text-sm ${pestana === 'estudiantes' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            Padrón de Estudiantes ({estudiantes.length})
+          </button>
         </div>
 
         {/* Pestaña 1: Configuración del Examen */}
@@ -568,6 +624,68 @@ export default function AdminPage() {
                       </td>
                     </tr>
                   )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {pestana === 'estudiantes' && (
+          <div className="bg-white p-6 rounded-b-lg shadow-md space-y-6">
+            <form onSubmit={handleAgregarEstudiante} className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <input
+                type="text"
+                placeholder="Nombre Completo"
+                value={nuevoNombre}
+                onChange={(e) => setNuevoNombre(e.target.value)}
+                className="p-3 border rounded-lg text-gray-800"
+                required
+              />
+              <input
+                type="email"
+                placeholder="correo@ucvvirtual.edu.pe"
+                value={nuevoEmail}
+                onChange={(e) => setNuevoEmail(e.target.value)}
+                className="p-3 border rounded-lg text-gray-800"
+                required
+              />
+              <select
+                value={nuevaSeccionEstudiante}
+                onChange={(e) => setNuevaSeccionEstudiante(e.target.value)}
+                className="p-3 border rounded-lg text-gray-800 bg-white"
+                required
+              >
+                <option value="">Seleccionar Sección</option>
+                {secciones.map((s) => (
+                  <option key={s.id} value={s.nombre}>Sección {s.nombre}</option>
+                ))}
+              </select>
+              <button type="submit" className="py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700">
+                + Registrar Estudiante
+              </button>
+            </form>
+
+            <div className="border rounded-lg overflow-x-auto">
+              <table className="w-full text-left text-sm text-gray-600">
+                <thead className="bg-gray-100 text-gray-700 uppercase font-semibold text-xs">
+                  <tr>
+                    <th className="p-3">Nombre</th>
+                    <th className="p-3">Correo</th>
+                    <th className="p-3">Sección</th>
+                    <th className="p-3 text-right">Acción</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {estudiantes.map((est) => (
+                    <tr key={est.id} className="hover:bg-gray-50">
+                      <td className="p-3 font-medium text-gray-800">{est.nombre}</td>
+                      <td className="p-3">{est.email}</td>
+                      <td className="p-3"><span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-semibold">{est.seccion}</span></td>
+                      <td className="p-3 text-right">
+                        <button onClick={() => handleEliminarEstudiante(est.id)} className="text-red-600 font-bold text-xs hover:underline">Eliminar</button>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
