@@ -1,0 +1,32 @@
+{
+  "name": "agente-evaluador",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^1.0.0",
+    "@supabase/supabase-js": "^2.48.0",
+    "ai": "^4.0.0",
+    "next": "15.1.0",
+    "pdf2json": "^3.1.5",
+    "pdfjs-dist": "^6.3.289",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "autoprefixer": "^10.5.6",
+    "eslint": "^9",
+    "eslint-config-next": "15.1.0",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5"
+  }
+}
