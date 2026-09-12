@@ -13,7 +13,7 @@ const supabase = createClient(
 // Función auxiliar para extraer texto del PDF
 function extraerTextoPDF(buffer: Buffer): Promise<string> {
   return new Promise((resolve, reject) => {
-    const pdfParser = new PDFParser(null, 1);
+    const pdfParser = new PDFParser(null, true);
     pdfParser.on('pdfParser_dataError', (errData: any) => reject(errData.parserError));
     pdfParser.on('pdfParser_dataReady', () => resolve(pdfParser.getRawTextContent()));
     pdfParser.parseBuffer(buffer);
