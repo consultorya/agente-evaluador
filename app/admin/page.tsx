@@ -8,12 +8,11 @@ import * as XLSX from 'xlsx';
 // Configurar el worker para pdfjs-dist
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
-
+// Cliente Supabase instanciado fuera del componente para evitar re-creaciones
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
-
 
 interface EstudianteBD {
   id: number;
@@ -40,6 +39,8 @@ interface SeccionBD {
 }
 
 export default function AdminPage() {
+  const [generando, setGenerando] = useState(false);
+
   // Estado de Autenticación
   const [autenticado, setAutenticado] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
@@ -47,14 +48,14 @@ export default function AdminPage() {
 
   // Estado de Pestañas
   const [pestana, setPestana] = useState<'examen' | 'secciones' | 'estudiantes' | 'resultados'>('examen');
-  
+
   // Estados para gestión de estudiantes
   const [estudiantes, setEstudiantes] = useState<EstudianteBD[]>([]);
   const [nuevoNombre, setNuevoNombre] = useState('');
   const [nuevoEmail, setNuevoEmail] = useState('');
   const [nuevaSeccionEstudiante, setNuevaSeccionEstudiante] = useState('');
 
-    // Estado del Examen
+  // Estado del Examen
   const [titulo, setTitulo] = useState('');
   const [textoBase, setTextoBase] = useState('');
   const [cantidadPreguntas, setCantidadPreguntas] = useState(5);
@@ -67,11 +68,12 @@ export default function AdminPage() {
   const [secciones, setSecciones] = useState<SeccionBD[]>([]);
   const [nuevaSeccion, setNuevaSeccion] = useState('');
 
-  // Estado de Resultados
+  // Estado de Resultados y Filtros
   const [resultados, setResultados] = useState<Resultado[]>([]);
   const [seccionFiltro, setSeccionFiltro] = useState<string>('TODAS');
+  const [emailFiltro, setEmailFiltro] = useState<string>(''); // <- Filtro por correo agregado
 
-  // Cargar estudiantes en el useEffect cuando esté autenticado
+  // Cargar estudiantes desde Supabase
   const cargarEstudiantes = async () => {
     const { data } = await supabase.from('estudiantes').select('*').order('nombre', { ascending: true });
     if (data) setEstudiantes(data);
@@ -90,25 +92,49 @@ export default function AdminPage() {
       cargarDatosExamen();
       cargarSecciones();
       cargarResultados();
+      cargarEstudiantes();
     }
   }, [autenticado]);
 
+  // VALIDACIÓN DE REGISTRO DE ESTUDIANTE CON VERIFICACIÓN DE CORREO DUPLICADO
   const handleAgregarEstudiante = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nuevoNombre.trim() || !nuevoEmail.trim() || !nuevaSeccionEstudiante) {
+    
+    const emailLimpio = nuevoEmail.trim().toLowerCase();
+
+    if (!nuevoNombre.trim() || !emailLimpio || !nuevaSeccionEstudiante) {
       alert('Completa todos los campos');
       return;
     }
 
+    // 1. Validar si el correo ya existe en la base de datos
+    const { data: estudianteExistente, error: errorConsulta } = await supabase
+      .from('estudiantes')
+      .select('id, email')
+      .eq('email', emailLimpio)
+      .maybeSingle();
+
+    if (errorConsulta) {
+      alert(`Error al verificar correo: ${errorConsulta.message}`);
+      return;
+    }
+
+    if (estudianteExistente) {
+      alert(`⚠️ El estudiante con correo "${emailLimpio}" ya se encuentra registrado.`);
+      return;
+    }
+
+    // 2. Si no existe, proceder con la inserción
     const { error } = await supabase.from('estudiantes').insert({
       nombre: nuevoNombre.trim(),
-      email: nuevoEmail.trim().toLowerCase(),
+      email: emailLimpio,
       seccion: nuevaSeccionEstudiante,
     });
 
     if (error) {
-      alert(`Error: ${error.message}`);
+      alert(`Error al registrar estudiante: ${error.message}`);
     } else {
+      alert('✅ Estudiante registrado exitosamente.');
       setNuevoNombre('');
       setNuevoEmail('');
       setNuevaSeccionEstudiante('');
@@ -240,23 +266,33 @@ export default function AdminPage() {
     }
   };
 
+  // FILTRADO COMBINADO (POR SECCIÓN Y POR CORREO)
+  const resultadosFiltrados = resultados.filter((r) => {
+    const cumpleSeccion = seccionFiltro === 'TODAS' || r.seccion === seccionFiltro;
+    const cumpleEmail = emailFiltro.trim() === '' || 
+      (r.estudiante_email && r.estudiante_email.toLowerCase().includes(emailFiltro.trim().toLowerCase()));
+    
+    return cumpleSeccion && cumpleEmail;
+  });
+
   const exportarExcel = () => {
     if (resultadosFiltrados.length === 0) {
       alert('No hay resultados para exportar.');
       return;
     }
 
-    const datosExcel = resultadosFiltrados.map((item, index) => ({
-      'N°': index + 1,
-      'Correo Estudiante': item.estudiante_email,
-      'Sección': item.seccion,
-      'Evaluación': item.titulo_examen,
-      'Respuestas Correctas': `${item.correctas} / ${item.total_preguntas}`,
-      'Nota (sobre 20)': item.nota,
-      'Fecha y Hora': item.created_at || item.fecha_registro
-        ? new Date(item.created_at || item.fecha_registro!).toLocaleString('es-PE')
-        : 'Sin fecha',
-    }));
+    const datosExcel = resultadosFiltrados.map((item, index) => {
+      const fecha = item.created_at || item.fecha_registro;
+      return {
+        'N°': index + 1,
+        'Correo Estudiante': item.estudiante_email,
+        'Sección': item.seccion,
+        'Evaluación': item.titulo_examen,
+        'Respuestas Correctas': `${item.correctas} / ${item.total_preguntas}`,
+        'Nota (sobre 20)': item.nota,
+        'Fecha y Hora': fecha ? new Date(fecha).toLocaleString('es-PE') : 'Sin fecha',
+      };
+    });
 
     const worksheet = XLSX.utils.json_to_sheet(datosExcel);
     const workbook = XLSX.utils.book_new();
@@ -266,9 +302,22 @@ export default function AdminPage() {
     XLSX.writeFile(workbook, nombreArchivo);
   };
 
-  const resultadosFiltrados = seccionFiltro === 'TODAS'
-    ? resultados
-    : resultados.filter((r) => r.seccion === seccionFiltro);
+  const handleRegenerarPreguntas = async () => {
+    if (!confirm('¿Deseas re-generar un nuevo examen para TODAS las secciones?')) return;
+
+    setGenerando(true);
+    try {
+      const res = await fetch('/api/regenerar-preguntas', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error en la solicitud');
+
+      alert(data.mensaje || 'Preguntas regeneradas correctamente');
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setGenerando(false);
+    }
+  };
 
   // --- VISTA DE LOGIN SI NO ESTÁ AUTENTICADO ---
   if (!autenticado) {
@@ -327,6 +376,14 @@ export default function AdminPage() {
             <p className="text-sm text-gray-500">Gestión de lecturas, exámenes y reporte de calificaciones</p>
           </div>
           <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleRegenerarPreguntas}
+              disabled={generando}
+              className="px-4 py-2 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 disabled:opacity-50"
+            >
+              {generando ? '⏳ Generando preguntas...' : '🔄 Re-generar Preguntas desde PDF Guardado'}
+            </button>
             <a
               href="/"
               className="px-4 py-2 bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 text-sm"
@@ -378,8 +435,15 @@ export default function AdminPage() {
             Reporte de Calificaciones ({resultados.length})
           </button>
           <button
-            onClick={() => { setPestana('estudiantes'); cargarEstudiantes(); }}
-            className={`px-6 py-3 font-semibold text-sm ${pestana === 'estudiantes' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+            onClick={() => {
+              setPestana('estudiantes');
+              cargarEstudiantes();
+            }}
+            className={`px-6 py-3 font-semibold text-sm ${
+              pestana === 'estudiantes'
+                ? 'border-b-2 border-blue-600 text-blue-600'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
           >
             Padrón de Estudiantes ({estudiantes.length})
           </button>
@@ -538,24 +602,47 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* Pestaña 3: Reporte de Calificaciones */}
+        {/* Pestaña 3: Reporte de Calificaciones con Filtro por Correo y Sección */}
         {pestana === 'resultados' && (
           <div className="bg-white p-6 rounded-b-lg shadow-md space-y-6">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <label className="text-sm font-semibold text-gray-700">Filtrar por sección:</label>
-                <select
-                  value={seccionFiltro}
-                  onChange={(e) => setSeccionFiltro(e.target.value)}
-                  className="p-2 border rounded-lg text-sm bg-white text-gray-800"
-                >
-                  <option value="TODAS">Todas las secciones</option>
-                  {secciones.map((s) => (
-                    <option key={s.id} value={s.nombre}>
-                      Sección {s.nombre}
-                    </option>
-                  ))}
-                </select>
+            <div className="flex flex-wrap justify-between items-center gap-4">
+              <div className="flex flex-wrap items-center gap-4">
+                {/* Filtro por Sección */}
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-semibold text-gray-700">Sección:</label>
+                  <select
+                    value={seccionFiltro}
+                    onChange={(e) => setSeccionFiltro(e.target.value)}
+                    className="p-2 border rounded-lg text-sm bg-white text-gray-800"
+                  >
+                    <option value="TODAS">Todas las secciones</option>
+                    {secciones.map((s) => (
+                      <option key={s.id} value={s.nombre}>
+                        Sección {s.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Filtro por Correo */}
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-semibold text-gray-700">Buscar por Correo:</label>
+                  <input
+                    type="text"
+                    placeholder="ejemplo@ucvvirtual.edu.pe"
+                    value={emailFiltro}
+                    onChange={(e) => setEmailFiltro(e.target.value)}
+                    className="p-2 border rounded-lg text-sm text-gray-800 w-64"
+                  />
+                  {emailFiltro && (
+                    <button
+                      onClick={() => setEmailFiltro('')}
+                      className="text-xs text-red-500 hover:underline font-semibold"
+                    >
+                      Limpiar
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="flex gap-2">
@@ -587,40 +674,41 @@ export default function AdminPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {resultadosFiltrados.map((res) => (
-                    <tr key={res.id} className="hover:bg-gray-50">
-                      <td className="p-3 font-medium text-gray-800">{res.estudiante_email}</td>
-                      <td className="p-3">
-                        <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-semibold">
-                          {res.seccion}
-                        </span>
-                      </td>
-                      <td className="p-3 text-xs text-gray-600">{res.titulo_examen}</td>
-                      <td className="p-3 text-center">
-                        {res.correctas} / {res.total_preguntas}
-                      </td>
-                      <td className="p-3 text-center">
-                        <span
-                          className={`font-bold px-2 py-1 rounded text-xs ${
-                            res.nota >= 11
-                              ? 'bg-green-100 text-green-800'
-                              : 'bg-red-100 text-red-800'
-                          }`}
-                        >
-                          {res.nota}
-                        </span>
-                      </td>
-                      <td className="p-3 text-right text-xs text-gray-400">
-                        {res.created_at || res.fecha_registro
-                          ? new Date(res.created_at || res.fecha_registro!).toLocaleString('es-PE')
-                          : 'Sin fecha'}
-                      </td>
-                    </tr>
-                  ))}
+                  {resultadosFiltrados.map((res) => {
+                    const fecha = res.created_at || res.fecha_registro;
+                    return (
+                      <tr key={res.id} className="hover:bg-gray-50">
+                        <td className="p-3 font-medium text-gray-800">{res.estudiante_email}</td>
+                        <td className="p-3">
+                          <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-semibold">
+                            {res.seccion}
+                          </span>
+                        </td>
+                        <td className="p-3 text-xs text-gray-600">{res.titulo_examen}</td>
+                        <td className="p-3 text-center">
+                          {res.correctas} / {res.total_preguntas}
+                        </td>
+                        <td className="p-3 text-center">
+                          <span
+                            className={`font-bold px-2 py-1 rounded text-xs ${
+                              res.nota >= 11
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-red-100 text-red-800'
+                            }`}
+                          >
+                            {res.nota}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right text-xs text-gray-400">
+                          {fecha ? new Date(fecha).toLocaleString('es-PE') : 'Sin fecha'}
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {resultadosFiltrados.length === 0 && (
                     <tr>
                       <td colSpan={6} className="p-6 text-center text-gray-400">
-                        No hay calificaciones para mostrar.
+                        No hay calificaciones que coincidan con los criterios de búsqueda.
                       </td>
                     </tr>
                   )}
@@ -630,6 +718,7 @@ export default function AdminPage() {
           </div>
         )}
 
+        {/* Pestaña 4: Padrón de Estudiantes */}
         {pestana === 'estudiantes' && (
           <div className="bg-white p-6 rounded-b-lg shadow-md space-y-6">
             <form onSubmit={handleAgregarEstudiante} className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -680,12 +769,28 @@ export default function AdminPage() {
                     <tr key={est.id} className="hover:bg-gray-50">
                       <td className="p-3 font-medium text-gray-800">{est.nombre}</td>
                       <td className="p-3">{est.email}</td>
-                      <td className="p-3"><span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-semibold">{est.seccion}</span></td>
+                      <td className="p-3">
+                        <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-semibold">
+                          {est.seccion}
+                        </span>
+                      </td>
                       <td className="p-3 text-right">
-                        <button onClick={() => handleEliminarEstudiante(est.id)} className="text-red-600 font-bold text-xs hover:underline">Eliminar</button>
+                        <button
+                          onClick={() => handleEliminarEstudiante(est.id)}
+                          className="text-red-600 font-bold text-xs hover:underline"
+                        >
+                          Eliminar
+                        </button>
                       </td>
                     </tr>
                   ))}
+                  {estudiantes.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="p-6 text-center text-gray-400">
+                        No hay estudiantes registrados.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>

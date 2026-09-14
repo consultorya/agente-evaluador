@@ -77,7 +77,7 @@ export default function StudentPage() {
   useEffect(() => {
     let timer: NodeJS.Timeout;
     if (paso === 'resultado') {
-      setTiempoRestante(60); // Iniciar en 60 segundos
+      setTiempoRestante(60);
       timer = setInterval(() => {
         setTiempoRestante((prev) => {
           if (prev <= 1) {
@@ -98,7 +98,7 @@ export default function StudentPage() {
   // Iniciar el examen
   const handleIniciarExamen = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     const correoLimpio = email.trim().toLowerCase();
 
     if (!correoLimpio.endsWith('@ucvvirtual.edu.pe')) {
@@ -106,7 +106,7 @@ export default function StudentPage() {
       return;
     }
 
-    if (!seccion) {
+    if (!seccion.trim()) {
       alert('Por favor selecciona una sección.');
       return;
     }
@@ -115,38 +115,76 @@ export default function StudentPage() {
     setErrorMsg('');
 
     try {
-      // 1. NUEVA VALIDACIÓN: Verificar si el alumno está en la lista blanca (tabla estudiantes)
-      const { data: estudianteValido, error: errEstudiante } = await supabase
-        .from('estudiantes')
-        .select('*')
-        .eq('email', correoLimpio)
-        .eq('seccion', seccion)
-        .single();
-
-      if (errEstudiante || !estudianteValido) {
-        setErrorMsg('Tu correo no está registrado en el padrón o no pertenece a la sección seleccionada.');
-        setCargando(false);
-        return;
-      }
-
-      // 2. TU CÓDIGO ORIGINAL: Obtener el examen desde la API
+      // Petición directa a la API encargada de validar padrón y entregar el examen
       const res = await fetch('/api/obtener-examen-estudiante', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ estudiante_email: correoLimpio }),
+        body: JSON.stringify({
+          estudiante_email: correoLimpio,
+          seccion: seccion.trim(),
+        }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        setErrorMsg(data.error || 'No se pudo cargar la evaluación.');
+        setErrorMsg(data.error || 'No estás registrado en el padrón de esta sección. Contacta al docente.');
         setCargando(false);
         return;
       }
 
-      // 3. SE MANTIENEN TUS ESTADOS ORIGINALES
       setTituloExamen(data.titulo);
-      setPreguntas(data.preguntas);
+
+      // Mapeo robusto y normalización de las preguntas
+      const preguntasAdaptadas = (data.preguntas || []).map((q: any, index: number) => {
+        const opciones = Array.isArray(q.opciones) ? q.opciones : [];
+        
+        // --- NORMALIZACIÓN DE LA RESPUESTA CORRECTA ---
+        let rawCorrecta = q.respuestaCorrecta ?? q.respuesta_correcta ?? q.correcta ?? 0;
+        let indiceCorrecto = 0;
+
+        if (typeof rawCorrecta === 'number') {
+          indiceCorrecto = rawCorrecta;
+        } else if (typeof rawCorrecta === 'string') {
+          const valTrim = rawCorrecta.trim();
+          // Si viene como índice en string ("0", "1", etc.)
+          if (!isNaN(Number(valTrim))) {
+            indiceCorrecto = parseInt(valTrim, 10);
+          } 
+          // Si viene como letra ("A", "B", "C", "D" o "a", "b", "c", "d")
+          else if (/^[A-Da-d]$/.test(valTrim)) {
+            indiceCorrecto = valTrim.toUpperCase().charCodeAt(0) - 65;
+          } 
+          // Si viene el texto completo de la opción (ej. "Lima")
+          else {
+            const idxEncontrado = opciones.findIndex(
+              (op: string) => op.trim().toLowerCase() === valTrim.toLowerCase()
+            );
+            indiceCorrecto = idxEncontrado !== -1 ? idxEncontrado : 0;
+          }
+        }
+
+        // --- BÚSQUEDA DE LA EXPLICACIÓN / RETROALIMENTACIÓN ---
+        const explicacionTexto =
+          q.explicacion ||
+          q.feedback ||
+          q.justificacion ||
+          q.retroalimentacion ||
+          q.explicacion_respuesta ||
+          'Sin explicación disponible.';
+
+        return {
+          id: q.id || index + 1,
+          pregunta: q.enunciado || q.pregunta || q.texto || 'Pregunta sin texto',
+          opciones: opciones,
+          respuestaCorrecta: indiceCorrecto,
+          explicacion: explicacionTexto,
+        };
+      });
+
+      console.log('Preguntas normalizadas cargadas:', preguntasAdaptadas);
+
+      setPreguntas(preguntasAdaptadas);
       setPaso('examen');
     } catch (err) {
       setErrorMsg('Error de conexión al obtener el examen.');
@@ -187,8 +225,8 @@ export default function StudentPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          estudiante_email: email,
-          seccion,
+          estudiante_email: email.trim().toLowerCase(),
+          seccion: seccion.trim(),
           titulo_examen: tituloExamen,
           correctas: numCorrectas,
           total_preguntas: preguntas.length,
@@ -208,7 +246,6 @@ export default function StudentPage() {
       setCargando(false);
     }
   };
-
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
@@ -245,6 +282,7 @@ export default function StudentPage() {
                     onChange={(e) => setSeccion(e.target.value)}
                     className="mt-1 w-full p-3 border rounded-lg focus:ring-blue-500 focus:border-blue-500 text-gray-800 bg-white"
                   >
+                    <option value="">-- Selecciona tu sección --</option>
                     {listaSecciones.map((sec) => (
                       <option key={sec.id} value={sec.nombre}>
                         {sec.nombre}
@@ -323,7 +361,6 @@ export default function StudentPage() {
           {/* PASO 3: CALIFICACIÓN Y RETROALIMENTACIÓN */}
           {paso === 'resultado' && (
             <div className="space-y-6 text-center">
-              {/* Barra del temporizador de cierre de sesión */}
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex justify-between items-center text-amber-800 text-sm font-medium">
                 <span>⏱️ Esta pantalla se cerrará automáticamente en: <strong>{tiempoRestante}s</strong></span>
                 <button
@@ -372,15 +409,17 @@ export default function StudentPage() {
                           Respuesta correcta: {q.opciones[q.respuestaCorrecta]}
                         </p>
                       )}
-                      <p className="text-xs italic mt-2 text-gray-500 bg-white p-2 rounded border">
-                        💡 {q.explicacion}
-                      </p>
+                      {/* 💡 MOSTRAR EXPLICACIÓN SÓLO SI EXISTE Y NO ES LA DE POR DEFECTO */}
+                        {q.explicacion && q.explicacion !== 'Sin explicación disponible.' && (
+                          <p className="text-xs italic mt-2 text-gray-600 bg-white p-2 rounded border">
+                            💡 {q.explicacion}
+                          </p>
+                        )}
                     </div>
                   );
                 })}
               </div>
 
-              {/* Botón inferior principal de salida */}
               <div className="pt-4 border-t">
                 <button
                   type="button"

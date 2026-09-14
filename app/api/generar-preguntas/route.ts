@@ -4,11 +4,15 @@ import { NextResponse } from 'next/server';
 // @ts-ignore
 import PDFParser from 'pdf2json';
 import { createClient } from '@supabase/supabase-js';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
+
+const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY || '';
+const genAI = new GoogleGenerativeAI(apiKey);
 
 // Función auxiliar para extraer texto del PDF
 function extraerTextoPDF(buffer: Buffer): Promise<string> {
@@ -20,7 +24,7 @@ function extraerTextoPDF(buffer: Buffer): Promise<string> {
   });
 }
 
-// POST: Procesa el PDF y actualiza la evaluación de la semana
+// POST: Procesa el PDF, genera las preguntas con Gemini una sola vez y lo guarda todo en Supabase
 export async function POST(req: Request) {
   try {
     const formData = await req.formData();
@@ -42,6 +46,33 @@ export async function POST(req: Request) {
 
     const textoLimpio = textoPDF.substring(0, 12000);
 
+    // Generar las preguntas con Gemini una sola vez al subir el PDF
+    let preguntasGeneradas: any[] = [];
+    try {
+      const model = genAI.getGenerativeModel({ model: 'gemini-3.6-flash' });
+      const promptSystem = `Eres un docente universitario experto. Basándote ÚNICAMENTE en el siguiente texto, genera un examen de ${cantidadPreguntas} preguntas con opción múltiple.
+Texto:
+"${textoLimpio}"
+
+Responde ÚNICAMENTE con un arreglo JSON válido con este formato estricto, sin bloques de código markdown:
+[
+  {
+    "id": 1,
+    "enunciado": "Texto de la pregunta",
+    "opciones": ["Opción A", "Opción B", "Opción C", "Opción D"],
+    "respuestaCorrecta": "Opción exacta que es la correcta"
+  }
+]`;
+
+      const result = await model.generateContent(promptSystem);
+      const textResponse = result.response.text().trim();
+      const cleanedJson = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+      preguntasGeneradas = JSON.parse(cleanedJson);
+    } catch (geminiError) {
+      console.error('Error al generar preguntas con Gemini:', geminiError);
+      // Continuará guardando el examen aun si falla Gemini para no bloquear el proceso
+    }
+
     const { data, error } = await supabase
       .from('examenes')
       .upsert({
@@ -49,6 +80,7 @@ export async function POST(req: Request) {
         titulo,
         texto_base: textoLimpio,
         cantidad_preguntas: cantidadPreguntas,
+        preguntas: preguntasGeneradas,
         activo: false, // Por seguridad se sube apagado por defecto
         updated_at: new Date().toISOString(),
       })
@@ -59,7 +91,7 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json({
-      mensaje: 'Examen guardado correctamente.',
+      mensaje: 'Examen y preguntas guardados correctamente en la base de datos.',
       examen: data[0],
     });
   } catch (error: any) {
