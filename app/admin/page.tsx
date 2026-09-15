@@ -71,8 +71,29 @@ export default function AdminPage() {
   // Estado de Resultados y Filtros
   const [resultados, setResultados] = useState<Resultado[]>([]);
   const [seccionFiltro, setSeccionFiltro] = useState<string>('TODAS');
+  const [tituloFiltro, setTituloFiltro] = useState<string>('TODOS');
   const [emailFiltro, setEmailFiltro] = useState<string>(''); // <- Filtro por correo agregado
 
+  const [examenes, setExamenes] = useState<any[]>([]);
+  const [cargandoExamenes, setCargandoExamenes] = useState(true);
+
+ 
+  useEffect(() => {
+    const cargarTodasLasSecciones = async () => {
+      setCargandoExamenes(true);
+      const { data, error } = await supabase
+        .from('examenes')
+        .select('*')
+        .order('id', { ascending: true }); // Carga los exámenes existentes
+
+      if (!error && data) {
+        setExamenes(data);
+      }
+      setCargandoExamenes(false);
+    };
+    cargarTodasLasSecciones();
+  }, [supabase]);
+  
   // Cargar estudiantes desde Supabase
   const cargarEstudiantes = async () => {
     const { data } = await supabase.from('estudiantes').select('*').order('nombre', { ascending: true });
@@ -266,13 +287,26 @@ export default function AdminPage() {
     }
   };
 
-  // FILTRADO COMBINADO (POR SECCIÓN Y POR CORREO)
-  const resultadosFiltrados = resultados.filter((r) => {
-    const cumpleSeccion = seccionFiltro === 'TODAS' || r.seccion === seccionFiltro;
-    const cumpleEmail = emailFiltro.trim() === '' || 
-      (r.estudiante_email && r.estudiante_email.toLowerCase().includes(emailFiltro.trim().toLowerCase()));
-    
-    return cumpleSeccion && cumpleEmail;
+  // 1. Extraer la lista única de títulos disponibles en los resultados
+  const titulosDisponibles = Array.from(
+    new Set(resultados.map((r: any) => r.titulo_examen).filter(Boolean))
+  );
+
+  // 2. Aplicar el filtro combinado por Sección y Título de Examen
+  const resultadosFiltrados = resultados.filter((item: any) => {
+    // Limpieza de texto para comparación de sección
+    const secItem = item.seccion?.toLowerCase().replace('sección', '').replace('seccion', '').trim() || '';
+    const secFiltro = seccionFiltro.toLowerCase().replace('sección', '').replace('seccion', '').trim();
+
+    const coincideSeccion =
+      seccionFiltro === 'TODAS' ||
+      secItem === secFiltro;
+
+    const coincideTitulo =
+      tituloFiltro === 'TODOS' ||
+      item.titulo_examen?.trim().toLowerCase() === tituloFiltro.trim().toLowerCase();
+
+    return coincideSeccion && coincideTitulo;
   });
 
   const exportarExcel = () => {
@@ -449,100 +483,30 @@ export default function AdminPage() {
           </button>
         </div>
 
-        {/* Pestaña 1: Configuración del Examen */}
+        {/* Pestaña 1: Configuración de Exámenes por Sección */}
         {pestana === 'examen' && (
           <div className="bg-white p-6 rounded-b-lg shadow-md space-y-6">
-            <form onSubmit={handleGuardarExamen} className="space-y-6">
-              <div className="flex justify-between items-center bg-gray-50 p-4 rounded-lg border">
-                <div>
-                  <h3 className="font-bold text-gray-800">Estado del Examen</h3>
-                  <p className="text-xs text-gray-500">Si está inactivo, ningún alumno podrá ingresar.</p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={activo}
-                    onChange={(e) => setActivo(e.target.checked)}
-                    className="sr-only peer"
+            <div className="bg-blue-50 border-l-4 border-blue-600 p-4 rounded-r-lg">
+              <h3 className="font-bold text-blue-900 text-sm">Configuración de Exámenes por Sección</h3>
+              <p className="text-xs text-blue-700 mt-1">
+                Cada sección detectada en la base de datos cuenta con su propio contenido y estado de activación independiente.
+              </p>
+            </div>
+
+            {cargandoExamenes ? (
+              <p className="text-xs text-gray-500 font-semibold">Cargando secciones...</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {examenes.map((examenItem) => (
+                  <ConfiguracionExamenSeccion
+                    key={examenItem.id} // Usamos la Primary Key única
+                    datosExamen={examenItem}
+                    supabase={supabase}
+                    pdfjsLib={pdfjsLib}
                   />
-                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
-                  <span className="ml-3 text-sm font-semibold text-gray-700">
-                    {activo ? 'ACTIVADO' : 'DESACTIVADO'}
-                  </span>
-                </label>
+                ))}
               </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Título de la Evaluación / Lectura</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej: Evaluación N° 2 - Comprensión Lectora Semana 3"
-                  value={titulo}
-                  onChange={(e) => setTitulo(e.target.value)}
-                  className="mt-1 w-full p-3 border rounded-lg text-gray-800"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700">
-                  Cantidad de Preguntas a Generar con Gemini
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={20}
-                  required
-                  value={cantidadPreguntas}
-                  onChange={(e) => setCantidadPreguntas(Number(e.target.value))}
-                  className="mt-1 w-32 p-3 border rounded-lg text-gray-800"
-                />
-              </div>
-
-              <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
-                <label className="block text-sm font-bold text-blue-900">
-                  📄 Subir nueva lectura en PDF (Opcional)
-                </label>
-                <p className="text-xs text-blue-700">
-                  Selecciona un archivo PDF para extraer su texto e insertarlo automáticamente en el campo inferior.
-                </p>
-                <input
-                  type="file"
-                  accept=".pdf"
-                  onChange={handleFileUpload}
-                  disabled={cargandoPdf}
-                  className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700">
-                  Texto Base Extraído / Lectura o Banco de Preguntas
-                </label>
-                <textarea
-                  rows={8}
-                  required
-                  placeholder="El texto extraído del PDF aparecerá aquí, o puedes pegarlo/editarlo manualmente..."
-                  value={textoBase}
-                  onChange={(e) => setTextoBase(e.target.value)}
-                  className="mt-1 w-full p-3 border rounded-lg text-gray-800 font-mono text-sm"
-                />
-              </div>
-
-              {msgExamen && (
-                <div className={`p-3 rounded-lg text-sm ${msgExamen.includes('❌') || msgExamen.includes('Error') ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
-                  {msgExamen}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={guardandoExamen || cargandoPdf}
-                className="px-6 py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-400"
-              >
-                {guardandoExamen ? 'Guardando...' : 'Guardar y Actualizar Evaluación'}
-              </button>
-            </form>
+            )}
           </div>
         )}
 
@@ -624,24 +588,21 @@ export default function AdminPage() {
                   </select>
                 </div>
 
-                {/* Filtro por Correo */}
+                {/* Nuevo Filtro Dinámico por Examen */}
                 <div className="flex items-center gap-2">
-                  <label className="text-sm font-semibold text-gray-700">Buscar por Correo:</label>
-                  <input
-                    type="text"
-                    placeholder="ejemplo@ucvvirtual.edu.pe"
-                    value={emailFiltro}
-                    onChange={(e) => setEmailFiltro(e.target.value)}
-                    className="p-2 border rounded-lg text-sm text-gray-800 w-64"
-                  />
-                  {emailFiltro && (
-                    <button
-                      onClick={() => setEmailFiltro('')}
-                      className="text-xs text-red-500 hover:underline font-semibold"
-                    >
-                      Limpiar
-                    </button>
-                  )}
+                  <label className="text-sm font-semibold text-gray-700">Examen:</label>
+                  <select
+                    value={tituloFiltro}
+                    onChange={(e) => setTituloFiltro(e.target.value)}
+                    className="p-2 border rounded-lg text-sm bg-white text-gray-800"
+                  >
+                    <option value="TODOS">Todos los exámenes</option>
+                    {titulosDisponibles.map((titulo) => (
+                      <option key={titulo} value={titulo}>
+                        {titulo}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -797,6 +758,161 @@ export default function AdminPage() {
           </div>
         )}
 
+      </div>
+    </div>
+  );
+}
+
+interface PropsSeccion {
+  datosExamen: any;
+  supabase: any;
+  pdfjsLib: any;
+}
+
+function ConfiguracionExamenSeccion({ datosExamen, supabase, pdfjsLib }: PropsSeccion) {
+  // Inicializar estados con los datos que vienen directamente de la fila de la BD
+  const [titulo, setTitulo] = useState(datosExamen.titulo || '');
+  const [textoBase, setTextoBase] = useState(datosExamen.texto_base || '');
+  const [cantidadPreguntas, setCantidadPreguntas] = useState(datosExamen.cantidad_preguntas || 5);
+  const [activo, setActivo] = useState(datosExamen.activo ?? false);
+  const [guardando, setGuardando] = useState(false);
+  const [cargandoPdf, setCargandoPdf] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setCargandoPdf(true);
+    setMsg('Leyendo PDF...');
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      let textoExtraido = '';
+
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map((item: any) => item.str).join(' ');
+        textoExtraido += pageText + '\n\n';
+      }
+
+      setTextoBase(textoExtraido.trim());
+      setMsg(`✅ PDF cargado (${pdf.numPages} pág).`);
+    } catch (err) {
+      setMsg('❌ Error al leer PDF.');
+    } finally {
+      setCargandoPdf(false);
+    }
+  };
+
+  const handleGuardar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGuardando(true);
+    setMsg('');
+
+    // UPDATE exacto usando la Primary Key (id) del registro
+    const { error } = await supabase
+      .from('examenes')
+      .update({
+        titulo,
+        texto_base: textoBase,
+        cantidad_preguntas: cantidadPreguntas,
+        activo,
+      })
+      .eq('id', datosExamen.id);
+
+    if (error) {
+      setMsg(`Error: ${error.message}`);
+    } else {
+      setMsg('✅ Guardado con éxito.');
+    }
+    setGuardando(false);
+  };
+
+  return (
+    <div className="border border-gray-200 rounded-lg p-4 bg-gray-50 space-y-4 shadow-sm flex flex-col justify-between">
+      <div className="space-y-4">
+        {/* Cabecera con el nombre exacto extraído de la BD */}
+        <div className="flex justify-between items-center border-b pb-2">
+          <h2 className="text-lg font-bold text-blue-900">
+            {datosExamen.seccion || `Sección ID #${datosExamen.id}`}
+          </h2>
+
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={activo}
+              onChange={(e) => setActivo(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-600"></div>
+            <span className="ml-2 text-xs font-semibold text-gray-700">
+              {activo ? 'ACTIVO' : 'INACTIVO'}
+            </span>
+          </label>
+        </div>
+
+        <form onSubmit={handleGuardar} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">Título</label>
+            <input
+              type="text"
+              required
+              value={titulo}
+              onChange={(e) => setTitulo(e.target.value)}
+              className="w-full p-2 border rounded text-xs text-gray-800"
+              placeholder="Ej: Evaluación A1"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">Cant. Preguntas</label>
+            <input
+              type="number"
+              min={1}
+              max={20}
+              required
+              value={cantidadPreguntas}
+              onChange={(e) => setCantidadPreguntas(Number(e.target.value))}
+              className="w-full p-2 border rounded text-xs text-gray-800"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">Subir PDF</label>
+            <input
+              type="file"
+              accept=".pdf"
+              onChange={handleFileUpload}
+              disabled={cargandoPdf}
+              className="w-full text-xs text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-blue-600 file:text-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">Texto Base</label>
+            <textarea
+              rows={5}
+              required
+              value={textoBase}
+              onChange={(e) => setTextoBase(e.target.value)}
+              className="w-full p-2 border rounded text-xs font-mono text-gray-800"
+              placeholder="Contenido extraído del PDF..."
+            />
+          </div>
+
+          {msg && <p className="text-xs font-semibold text-blue-700">{msg}</p>}
+
+          <button
+            type="submit"
+            disabled={guardando || cargandoPdf}
+            className="w-full py-2 bg-blue-600 text-white font-bold text-xs rounded hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          >
+            {guardando ? 'Guardando...' : `Guardar ${datosExamen.seccion || 'Sección'}`}
+          </button>
+        </form>
       </div>
     </div>
   );
