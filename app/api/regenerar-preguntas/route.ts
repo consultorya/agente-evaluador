@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI } from '@google/generative-ai'; // 👈 Usa el paquete existente
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
@@ -8,6 +8,7 @@ const supabase = createClient(
 );
 
 const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY || '';
+const esperar = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function POST() {
   try {
@@ -18,41 +19,32 @@ export async function POST() {
       );
     }
 
-    // 1. Obtener el texto base almacenado en 'examenes'
-    const { data: examen, error: fetchError } = await supabase
+    const { data: examenes, error: fetchError } = await supabase
       .from('examenes')
-      .select('texto_base, cantidad_preguntas')
-      .limit(1)
-      .single();
+      .select('id, titulo, texto_base, cantidad_preguntas');
 
-    if (fetchError || !examen || !examen.texto_base) {
+    if (fetchError || !examenes || examenes.length === 0) {
       return NextResponse.json(
-        { error: 'No hay ningún texto de PDF guardado previamente.' },
+        { error: 'No se encontraron exámenes o lecturas guardadas.' },
         { status: 400 }
       );
     }
 
-    // 2. Obtener TODAS las secciones existentes en la base de datos
-    const { data: secciones, error: errorSecciones } = await supabase
-      .from('secciones')
-      .select('id, nombre');
-
-    if (errorSecciones || !secciones || secciones.length === 0) {
-      return NextResponse.json(
-        { error: 'No se encontraron secciones registradas.' },
-        { status: 400 }
-      );
-    }
-
+    // Instancia tradicional con la librería antigua
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: 'gemini-3.6-flash' });
 
-    // 3. Re-generar y guardar preguntas para cada sección
-    const actualizaciones = secciones.map(async (sec) => {
-      const promptSystem = `Eres un docente universitario experto. Basándote ÚNICAMENTE en el siguiente texto, genera un examen NUEVO de ${examen.cantidad_preguntas || 5} preguntas con opción múltiple para la sección ${sec.nombre}.
+    let totalActualizadas = 0;
+    const errores: string[] = [];
+
+    for (const ex of examenes) {
+      if (!ex.texto_base || !ex.texto_base.trim()) continue;
+
+      const cantidad = ex.cantidad_preguntas || 5;
+      const promptSystem = `Eres un docente universitario experto. Basándote ÚNICAMENTE en el siguiente texto, genera un examen NUEVO de ${cantidad} preguntas con opción múltiple para la evaluación "${ex.titulo || 'General'}".
 
 Texto:
-"${examen.texto_base}"
+"${ex.texto_base.trim()}"
 
 Responde ÚNICAMENTE con un arreglo JSON válido con este formato estricto, sin bloques de código markdown:
 [
@@ -64,26 +56,41 @@ Responde ÚNICAMENTE con un arreglo JSON válido con este formato estricto, sin 
   }
 ]`;
 
-      const result = await model.generateContent(promptSystem);
-      const textResponse = result.response.text().trim();
-      const cleanedJson = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
-      const nuevasPreguntas = JSON.parse(cleanedJson);
+      const maxIntentos = 3;
+      for (let intento = 1; intento <= maxIntentos; intento++) {
+        try {
+          const result = await model.generateContent(promptSystem);
+          const textResponse = result.response.text().trim();
+          const cleanedJson = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+          const nuevasPreguntas = JSON.parse(cleanedJson);
 
-      return supabase
-        .from('secciones')
-        .update({ preguntas: nuevasPreguntas })
-        .eq('id', sec.id);
-    });
+          const nombreSeccion = ex.titulo;
+          if (nombreSeccion) {
+            const { error: errorUpdate } = await supabase
+              .from('secciones')
+              .update({ preguntas: nuevasPreguntas })
+              .eq('nombre', nombreSeccion);
 
-    await Promise.all(actualizaciones);
+            if (!errorUpdate) {
+              totalActualizadas++;
+              break;
+            }
+          }
+        } catch (err: any) {
+          if (intento < maxIntentos) {
+            await esperar(intento * 2000);
+          } else {
+            errores.push(`Examen ${ex.titulo}: ${err.message}`);
+          }
+        }
+      }
+      await esperar(1000);
+    }
 
     return NextResponse.json({
-      mensaje: `¡Se re-generaron exitosamente las preguntas para las ${secciones.length} secciones!`,
+      mensaje: `¡Se re-generaron exitosamente las preguntas para ${totalActualizadas} secciones!`,
     });
   } catch (error: any) {
-    return NextResponse.json(
-      { error: error.message || 'Error al re-generar preguntas globales con Gemini.' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

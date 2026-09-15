@@ -8,7 +8,6 @@ import * as XLSX from 'xlsx';
 // Configurar el worker para pdfjs-dist
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
-// Cliente Supabase instanciado fuera del componente para evitar re-creaciones
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
@@ -55,15 +54,6 @@ export default function AdminPage() {
   const [nuevoEmail, setNuevoEmail] = useState('');
   const [nuevaSeccionEstudiante, setNuevaSeccionEstudiante] = useState('');
 
-  // Estado del Examen
-  const [titulo, setTitulo] = useState('');
-  const [textoBase, setTextoBase] = useState('');
-  const [cantidadPreguntas, setCantidadPreguntas] = useState(5);
-  const [activo, setActivo] = useState(false);
-  const [guardandoExamen, setGuardandoExamen] = useState(false);
-  const [cargandoPdf, setCargandoPdf] = useState(false);
-  const [msgExamen, setMsgExamen] = useState('');
-
   // Estado de Secciones
   const [secciones, setSecciones] = useState<SeccionBD[]>([]);
   const [nuevaSeccion, setNuevaSeccion] = useState('');
@@ -72,35 +62,32 @@ export default function AdminPage() {
   const [resultados, setResultados] = useState<Resultado[]>([]);
   const [seccionFiltro, setSeccionFiltro] = useState<string>('TODAS');
   const [tituloFiltro, setTituloFiltro] = useState<string>('TODOS');
-  const [emailFiltro, setEmailFiltro] = useState<string>(''); // <- Filtro por correo agregado
 
   const [examenes, setExamenes] = useState<any[]>([]);
   const [cargandoExamenes, setCargandoExamenes] = useState(true);
 
- 
-  useEffect(() => {
-    const cargarTodasLasSecciones = async () => {
-      setCargandoExamenes(true);
-      const { data, error } = await supabase
-        .from('examenes')
-        .select('*')
-        .order('id', { ascending: true }); // Carga los exámenes existentes
+  const cargarTodasLasSecciones = async () => {
+    setCargandoExamenes(true);
+    const { data, error } = await supabase
+      .from('examenes')
+      .select('id, titulo, texto_base, cantidad_preguntas, activo, seccion')
+      .order('id', { ascending: true });
 
-      if (!error && data) {
-        setExamenes(data);
-      }
-      setCargandoExamenes(false);
-    };
+    if (!error && data) {
+      setExamenes(data);
+    }
+    setCargandoExamenes(false);
+  };
+
+  useEffect(() => {
     cargarTodasLasSecciones();
-  }, [supabase]);
-  
-  // Cargar estudiantes desde Supabase
+  }, []);
+
   const cargarEstudiantes = async () => {
     const { data } = await supabase.from('estudiantes').select('*').order('nombre', { ascending: true });
     if (data) setEstudiantes(data);
   };
 
-  // Verificar si ya inició sesión previamente en la sesión actual
   useEffect(() => {
     const esAdmin = sessionStorage.getItem('admin_authenticated');
     if (esAdmin === 'true') {
@@ -110,17 +97,14 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (autenticado) {
-      cargarDatosExamen();
       cargarSecciones();
       cargarResultados();
       cargarEstudiantes();
     }
   }, [autenticado]);
 
-  // VALIDACIÓN DE REGISTRO DE ESTUDIANTE CON VERIFICACIÓN DE CORREO DUPLICADO
   const handleAgregarEstudiante = async (e: React.FormEvent) => {
     e.preventDefault();
-    
     const emailLimpio = nuevoEmail.trim().toLowerCase();
 
     if (!nuevoNombre.trim() || !emailLimpio || !nuevaSeccionEstudiante) {
@@ -128,7 +112,6 @@ export default function AdminPage() {
       return;
     }
 
-    // 1. Validar si el correo ya existe en la base de datos
     const { data: estudianteExistente, error: errorConsulta } = await supabase
       .from('estudiantes')
       .select('id, email')
@@ -145,7 +128,6 @@ export default function AdminPage() {
       return;
     }
 
-    // 2. Si no existe, proceder con la inserción
     const { error } = await supabase.from('estudiantes').insert({
       nombre: nuevoNombre.trim(),
       email: emailLimpio,
@@ -169,7 +151,6 @@ export default function AdminPage() {
     if (!error) cargarEstudiantes();
   };
 
-  // Manejar Login Docente
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     const claveCorrecta = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || 'admin123';
@@ -186,72 +167,6 @@ export default function AdminPage() {
   const handleLogout = () => {
     sessionStorage.removeItem('admin_authenticated');
     setAutenticado(false);
-  };
-
-  const cargarDatosExamen = async () => {
-    const { data, error } = await supabase.from('examenes').select('*').eq('id', 1).single();
-    if (!error && data) {
-      setTitulo(data.titulo || '');
-      setTextoBase(data.texto_base || '');
-      setCantidadPreguntas(data.cantidad_preguntas || 5);
-      setActivo(data.activo || false);
-    }
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.type !== 'application/pdf') {
-      alert('Por favor selecciona un archivo en formato PDF.');
-      return;
-    }
-
-    setCargandoPdf(true);
-    setMsgExamen('Leyendo contenido del PDF...');
-
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-
-      let textoExtraido = '';
-
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items.map((item: any) => item.str).join(' ');
-        textoExtraido += pageText + '\n\n';
-      }
-
-      setTextoBase(textoExtraido.trim());
-      setMsgExamen(`✅ PDF cargado con éxito (${pdf.numPages} páginas leídas).`);
-    } catch (err) {
-      setMsgExamen('❌ Error al leer el archivo PDF.');
-      console.error(err);
-    } finally {
-      setCargandoPdf(false);
-    }
-  };
-
-  const handleGuardarExamen = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setGuardandoExamen(true);
-    setMsgExamen('');
-
-    const { error } = await supabase.from('examenes').upsert({
-      id: 1,
-      titulo,
-      texto_base: textoBase,
-      cantidad_preguntas: cantidadPreguntas,
-      activo,
-    });
-
-    if (error) {
-      setMsgExamen(`Error al guardar: ${error.message}`);
-    } else {
-      setMsgExamen('✅ Configuración del examen actualizada con éxito.');
-    }
-    setGuardandoExamen(false);
   };
 
   const cargarSecciones = async () => {
@@ -287,20 +202,16 @@ export default function AdminPage() {
     }
   };
 
-  // 1. Extraer la lista única de títulos disponibles en los resultados
   const titulosDisponibles = Array.from(
     new Set(resultados.map((r: any) => r.titulo_examen).filter(Boolean))
   );
 
-  // 2. Aplicar el filtro combinado por Sección y Título de Examen
   const resultadosFiltrados = resultados.filter((item: any) => {
-    // Limpieza de texto para comparación de sección
     const secItem = item.seccion?.toLowerCase().replace('sección', '').replace('seccion', '').trim() || '';
     const secFiltro = seccionFiltro.toLowerCase().replace('sección', '').replace('seccion', '').trim();
 
     const coincideSeccion =
-      seccionFiltro === 'TODAS' ||
-      secItem === secFiltro;
+      seccionFiltro === 'TODAS' || secItem === secFiltro;
 
     const coincideTitulo =
       tituloFiltro === 'TODOS' ||
@@ -353,7 +264,6 @@ export default function AdminPage() {
     }
   };
 
-  // --- VISTA DE LOGIN SI NO ESTÁ AUTENTICADO ---
   if (!autenticado) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
@@ -398,7 +308,6 @@ export default function AdminPage() {
     );
   }
 
-  // --- VISTA DEL PANEL DE ADMINISTRACIÓN (AUTENTICADO) ---
   return (
     <div className="min-h-screen bg-gray-100 p-6">
       <div className="max-w-6xl mx-auto space-y-6">
@@ -499,7 +408,7 @@ export default function AdminPage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {examenes.map((examenItem) => (
                   <ConfiguracionExamenSeccion
-                    key={examenItem.id} // Usamos la Primary Key única
+                    key={examenItem.id}
                     datosExamen={examenItem}
                     supabase={supabase}
                     pdfjsLib={pdfjsLib}
@@ -566,12 +475,11 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* Pestaña 3: Reporte de Calificaciones con Filtro por Correo y Sección */}
+        {/* Pestaña 3: Reporte de Calificaciones */}
         {pestana === 'resultados' && (
           <div className="bg-white p-6 rounded-b-lg shadow-md space-y-6">
             <div className="flex flex-wrap justify-between items-center gap-4">
               <div className="flex flex-wrap items-center gap-4">
-                {/* Filtro por Sección */}
                 <div className="flex items-center gap-2">
                   <label className="text-sm font-semibold text-gray-700">Sección:</label>
                   <select
@@ -588,7 +496,6 @@ export default function AdminPage() {
                   </select>
                 </div>
 
-                {/* Nuevo Filtro Dinámico por Examen */}
                 <div className="flex items-center gap-2">
                   <label className="text-sm font-semibold text-gray-700">Examen:</label>
                   <select
@@ -597,9 +504,9 @@ export default function AdminPage() {
                     className="p-2 border rounded-lg text-sm bg-white text-gray-800"
                   >
                     <option value="TODOS">Todos los exámenes</option>
-                    {titulosDisponibles.map((titulo) => (
-                      <option key={titulo} value={titulo}>
-                        {titulo}
+                    {titulosDisponibles.map((t: any) => (
+                      <option key={t} value={t}>
+                        {t}
                       </option>
                     ))}
                   </select>
@@ -770,7 +677,7 @@ interface PropsSeccion {
 }
 
 function ConfiguracionExamenSeccion({ datosExamen, supabase, pdfjsLib }: PropsSeccion) {
-  // Inicializar estados con los datos que vienen directamente de la fila de la BD
+  const [archivoPdf, setArchivoPdf] = useState<File | null>(null);
   const [titulo, setTitulo] = useState(datosExamen.titulo || '');
   const [textoBase, setTextoBase] = useState(datosExamen.texto_base || '');
   const [cantidadPreguntas, setCantidadPreguntas] = useState(datosExamen.cantidad_preguntas || 5);
@@ -783,6 +690,7 @@ function ConfiguracionExamenSeccion({ datosExamen, supabase, pdfjsLib }: PropsSe
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setArchivoPdf(file);
     setCargandoPdf(true);
     setMsg('Leyendo PDF...');
 
@@ -800,120 +708,213 @@ function ConfiguracionExamenSeccion({ datosExamen, supabase, pdfjsLib }: PropsSe
 
       setTextoBase(textoExtraido.trim());
       setMsg(`✅ PDF cargado (${pdf.numPages} pág).`);
-    } catch (err) {
+    } catch (err: any) {
+      console.error('Error lectura PDF:', err);
       setMsg('❌ Error al leer PDF.');
     } finally {
       setCargandoPdf(false);
     }
   };
 
+  const [msgExamen, setMsgExamen] = useState<string | null>(null);
+  const [msgPreguntas, setMsgPreguntas] = useState<string | null>(null);
+
   const handleGuardar = async (e: React.FormEvent) => {
     e.preventDefault();
     setGuardando(true);
-    setMsg('');
+    setMsgExamen('Guardando datos del examen...');
+    setMsgPreguntas(null);
 
-    // UPDATE exacto usando la Primary Key (id) del registro
-    const { error } = await supabase
-      .from('examenes')
-      .update({
-        titulo,
-        texto_base: textoBase,
-        cantidad_preguntas: cantidadPreguntas,
-        activo,
-      })
-      .eq('id', datosExamen.id);
+    try {
+      // -----------------------------------------------------------------
+      // 1. ACTUALIZAR TABLA 'examenes' (titulo, texto_base, activo, etc.)
+      // -----------------------------------------------------------------
+      const { error: errorExamen } = await supabase
+        .from('examenes')
+        .update({
+          titulo: titulo.trim(),
+          texto_base: textoBase.trim(),
+          cantidad_preguntas: cantidadPreguntas,
+          activo: activo,
+        })
+        .eq('id', datosExamen.id);
 
-    if (error) {
-      setMsg(`Error: ${error.message}`);
-    } else {
-      setMsg('✅ Guardado con éxito.');
+      if (errorExamen) {
+        setMsgExamen(`❌ Error al actualizar el examen: ${errorExamen.message}`);
+        setGuardando(false);
+        return; // Si falla la BD principal, detendremos el proceso
+      }
+
+      setMsgExamen('✅ Datos del examen (título, lectura y estado) actualizados correctamente.');
+
+      // -----------------------------------------------------------------
+      // 2. GENERAR Y GUARDAR PREGUNTAS EN 'secciones' (Gemini + Supabase)
+      // -----------------------------------------------------------------
+      if (!textoBase.trim()) {
+        setMsgPreguntas('⚠️ No se generaron preguntas porque el texto de lectura está vacío.');
+        setGuardando(false);
+        return;
+      }
+
+      setMsgPreguntas('⏳ Generando preguntas con la IA...');
+
+      let preguntasGeneradas: any[] = [];
+      const formData = new FormData();
+      formData.append('textoBase', textoBase.trim());
+      formData.append('cantidadPreguntas', cantidadPreguntas.toString());
+
+      if (archivoPdf) {
+        formData.append('file', archivoPdf);
+      }
+
+      const resGenerar = await fetch('/api/generar-preguntas', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const dataGenerar = await resGenerar.json();
+
+      if (!resGenerar.ok) {
+        // En caso de error 503 o falla de modelo, capturamos el mensaje de la IA
+        setMsgPreguntas(`⚠️ Las preguntas NO se generaron por alta demanda/error de la IA: ${dataGenerar.error || 'Intente nuevamente más tarde.'}`);
+      } else {
+        preguntasGeneradas = dataGenerar.preguntas || [];
+
+        // Guardar las preguntas generadas en la tabla 'secciones'
+        const nombreSeccion = datosExamen.seccion || datosExamen.nombre;
+
+        if (nombreSeccion && preguntasGeneradas.length > 0) {
+          const { error: errorSeccion } = await supabase
+            .from('secciones')
+            .update({
+              preguntas: preguntasGeneradas,
+            })
+            .eq('nombre', nombreSeccion);
+
+          if (errorSeccion) {
+            setMsgPreguntas(`❌ Preguntas generadas por la IA, pero falló al guardarlas en la BD: ${errorSeccion.message}`);
+          } else {
+            setMsgPreguntas(`✅ ¡Preguntas generadas y guardadas exitosamente! (${preguntasGeneradas.length} preguntas)`);
+          }
+        } else {
+          setMsgPreguntas('⚠️ Se generaron 0 preguntas. Verifica el contenido del texto base.');
+        }
+      }
+
+    } catch (error: any) {
+      const mensajeDetallado = error?.message || String(error);
+      console.error('Error general en handleGuardar:', mensajeDetallado);
+      setMsgExamen(`❌ Error en el proceso: ${mensajeDetallado}`);
+    } finally {
+      setGuardando(false);
     }
-    setGuardando(false);
   };
 
   return (
     <div className="border border-gray-200 rounded-lg p-4 bg-gray-50 space-y-4 shadow-sm flex flex-col justify-between">
-      <div className="space-y-4">
-        {/* Cabecera con el nombre exacto extraído de la BD */}
-        <div className="flex justify-between items-center border-b pb-2">
-          <h2 className="text-lg font-bold text-blue-900">
-            {datosExamen.seccion || `Sección ID #${datosExamen.id}`}
-          </h2>
+      <form onSubmit={handleGuardar} className="space-y-4">
+        <div className="flex justify-between items-center border-b pb-3">
+          <div>
+            <h3 className="font-bold text-gray-800 text-sm">
+              Sección: {datosExamen.seccion || datosExamen.nombre || `ID ${datosExamen.id}`}
+            </h3>
+            <span className="text-xs text-gray-500">ID Fila: {datosExamen.id}</span>
+          </div>
 
-          <label className="relative inline-flex items-center cursor-pointer">
+          <label className="inline-flex items-center cursor-pointer gap-2">
+            <span className="text-xs font-semibold text-gray-700">
+              {activo ? 'Activo' : 'Bloqueado'}
+            </span>
             <input
               type="checkbox"
               checked={activo}
               onChange={(e) => setActivo(e.target.checked)}
               className="sr-only peer"
             />
-            <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-600"></div>
-            <span className="ml-2 text-xs font-semibold text-gray-700">
-              {activo ? 'ACTIVO' : 'INACTIVO'}
-            </span>
+            <div className="relative w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
           </label>
         </div>
 
-        <form onSubmit={handleGuardar} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">Título</label>
-            <input
-              type="text"
-              required
-              value={titulo}
-              onChange={(e) => setTitulo(e.target.value)}
-              className="w-full p-2 border rounded text-xs text-gray-800"
-              placeholder="Ej: Evaluación A1"
-            />
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1">
+            Título del Examen (Versión)
+          </label>
+          <input
+            type="text"
+            required
+            value={titulo}
+            onChange={(e) => setTitulo(e.target.value)}
+            className="w-full p-2 border rounded text-sm text-gray-800 focus:ring-2 focus:ring-blue-500 outline-none"
+            placeholder="Ej: Control 1, Examen Parcial"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1">
+            Cargar nueva lectura (PDF)
+          </label>
+          <input
+            type="file"
+            accept="application/pdf"
+            onChange={handleFileUpload}
+            disabled={cargandoPdf}
+            className="w-full text-xs text-gray-500 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1">
+            Texto de la Lectura
+          </label>
+          <textarea
+            rows={4}
+            value={textoBase}
+            onChange={(e) => setTextoBase(e.target.value)}
+            className="w-full p-2 border rounded text-xs text-gray-800 focus:ring-2 focus:ring-blue-500 outline-none"
+            placeholder="Pega el texto aquí o sube un PDF..."
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1">N° Preguntas a Generar</label>
+          <input
+            type="number"
+            min={1}
+            max={20}
+            value={cantidadPreguntas}
+            onChange={(e) => setCantidadPreguntas(Number(e.target.value))}
+            className="w-24 p-2 border rounded text-sm text-gray-800 focus:ring-2 focus:ring-blue-500 outline-none"
+          />
+        </div>
+
+        {/* Alerta para Datos del Examen (Estado, Título, Texto Base) */}
+        {msgExamen && (
+          <div className={`p-3 rounded-md mb-3 text-sm font-medium ${
+            msgExamen.startsWith('✅') ? 'bg-green-100 text-green-800 border border-green-300' : 'bg-red-100 text-red-800 border border-red-300'
+          }`}>
+            {msgExamen}
           </div>
+        )}
 
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">Cant. Preguntas</label>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              required
-              value={cantidadPreguntas}
-              onChange={(e) => setCantidadPreguntas(Number(e.target.value))}
-              className="w-full p-2 border rounded text-xs text-gray-800"
-            />
+        {/* Alerta para Generación y Guardado de Preguntas (IA + Secciones) */}
+        {msgPreguntas && (
+          <div className={`p-3 rounded-md mb-3 text-sm font-medium ${
+            msgPreguntas.startsWith('✅') ? 'bg-green-100 text-green-800 border border-green-300' :
+            msgPreguntas.startsWith('⚠️') ? 'bg-amber-100 text-amber-800 border border-amber-300' :
+            'bg-red-100 text-red-800 border border-red-300'
+          }`}>
+            {msgPreguntas}
           </div>
+        )}
 
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">Subir PDF</label>
-            <input
-              type="file"
-              accept=".pdf"
-              onChange={handleFileUpload}
-              disabled={cargandoPdf}
-              className="w-full text-xs text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-blue-600 file:text-white"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">Texto Base</label>
-            <textarea
-              rows={5}
-              required
-              value={textoBase}
-              onChange={(e) => setTextoBase(e.target.value)}
-              className="w-full p-2 border rounded text-xs font-mono text-gray-800"
-              placeholder="Contenido extraído del PDF..."
-            />
-          </div>
-
-          {msg && <p className="text-xs font-semibold text-blue-700">{msg}</p>}
-
-          <button
-            type="submit"
-            disabled={guardando || cargandoPdf}
-            className="w-full py-2 bg-blue-600 text-white font-bold text-xs rounded hover:bg-blue-700 disabled:opacity-50 transition-colors"
-          >
-            {guardando ? 'Guardando...' : `Guardar ${datosExamen.seccion || 'Sección'}`}
-          </button>
-        </form>
-      </div>
+        <button
+          type="submit"
+          disabled={guardando || cargandoPdf}
+          className="w-full py-2.5 bg-blue-600 text-white font-bold rounded text-xs hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-sm"
+        >
+          {guardando ? '⏳ Guardando y generando...' : '💾 Guardar Cambios de Sección'}
+        </button>
+      </form>
     </div>
   );
 }
