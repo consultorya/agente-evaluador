@@ -133,6 +133,7 @@ export default function StudentPage() {
         return;
       }
 
+      
       setTituloExamen(data.titulo);
 
       // Mapeo robusto y normalización de las preguntas
